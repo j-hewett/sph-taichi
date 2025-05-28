@@ -37,11 +37,11 @@ def calc_density_gradient(q, particles):
             d_density += mass * slope * r_particle
     return d_density
 
-#todo - I'm currently replacing 'q' with directly passing the particle itself
+#todo - replace 'q' with directly passing the particle itself
 # That way I can access its density (p.density) easily later
 # Also need to store density in particle instead of as array
 # loop would then be for p in particles: rho = p.density etc
-def calc_property(particle_, particles, densities):
+def calc_property(q, particles, densities):
     A = 0
     mass = 1
 
@@ -52,7 +52,7 @@ def calc_property(particle_, particles, densities):
     return A
 
 def calc_shared_pressure(rho_A, rho_B):
-    
+    pass
 
 def calc_pressure_force(q, particles, densities):
     d_P = 0
@@ -65,7 +65,6 @@ def calc_pressure_force(q, particles, densities):
                 r_particle = (q - p.position)/d
                 slope = d_SmoothingKernel(RADIUS, d)
                 if rho > 1e-5:
-                    shared_pressure = calc_shared_pressure(rho, densities[])
                     d_P += density_to_pressure(rho) * mass * slope * r_particle / rho
     return d_P
 

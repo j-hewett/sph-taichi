@@ -22,7 +22,7 @@ class Simulator:
     def __init__(self, particles, dt=0.01):
         self.particles = particles
         self.dt = dt
-        #self.densities = np.zeros(len(particles), dtype=np.float32)
+        self.densities = np.zeros(len(particles), dtype=np.float32)
 
     def step(self):
         for i, p in enumerate(self.particles):
