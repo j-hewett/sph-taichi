@@ -22,18 +22,17 @@ class Simulator:
     def __init__(self, particles, dt=0.01):
         self.particles = particles
         self.dt = dt
-        self.densities = np.zeros(len(particles), dtype=np.float32)
 
     def step(self):
-        for i, p in enumerate(self.particles):
+        for particle in self.particles:
 
-            apply_gravity(p)
+            apply_gravity(particle)
 
-            self.densities[i] = calc_density(p.position, self.particles)
+            particle.density = calc_density(particle, self.particles)
 
-            P_force = calc_pressure_force(p.position, self.particles, self.densities)
-            P_accel = P_force / self.densities[i]
-            p.apply_force(P_accel * p.mass)
+            P_force = calc_pressure_force(particle, self.particles)
+            P_accel = P_force / particle.density
+            particle.apply_force(P_accel * particle.mass)
 
-            p.update(self.dt)
+            particle.update(self.dt)
             
