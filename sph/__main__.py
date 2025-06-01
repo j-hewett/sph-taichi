@@ -9,8 +9,6 @@ BACKGROUND_COLOR = (30, 30, 30)
 PARTICLE_COLOR = (100, 200, 255)
 SIM_FLOOR_Y = -SCREEN_HEIGHT/2
 
-R_SMOOTHING = 100
-
 GRID_SIZE = 20
 MAX_DENSITY = 20  # tune this to adjust brightness scaling
 
@@ -25,14 +23,14 @@ def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     clock = pygame.time.Clock()
 
-    n_particles = 100
+    n_particles = 300
     df = 0.8
 
-    positions = (np.random.random((n_particles,2)) - 0.55) * np.array([800, 600])
+    positions = (np.random.random((n_particles,2)) - 0.55) * np.array([SCREEN_WIDTH, SCREEN_HEIGHT])
 
     particles = [Particle(position=pos, velocity=[0,0]) for pos in positions]
 
-    sim = Simulator(particles, dt=0.15)
+    sim = Simulator(particles, dt=0.05)
     sim_started = False
 
     running = True
