@@ -7,13 +7,11 @@ def apply_gravity(p, dt):
 
 def SmoothingKernel(radius, d):
     vol = (np.pi * np.power(radius,4))/6
-    return ((radius - d)**2)/vol
+    return np.where(d <= radius, ((radius - d)**2) / vol, 0.0)
 
 def d_SmoothingKernel(radius, d):
-    if (d >= radius):
-        return 0
     scale = 12 / (np.pi * np.power(radius,4))
-    return (d - radius) * scale
+    return np.where(d <= radius, (d - radius) * scale, 0.0)
 
 def calc_density(p, particles, radius): #Density at particle p
     density = 0
@@ -24,6 +22,12 @@ def calc_density(p, particles, radius): #Density at particle p
         influence = SmoothingKernel(radius, d)
         density += mass * influence
     return density
+
+def calc_density2(p, positions, radius): #Vectorized
+    mass = 1
+    distances = np.linalg.norm(positions - p.position, axis=1)
+    influences = SmoothingKernel(radius, distances)
+    return np.sum(mass*influences) #sum of densities
 
 def calc_density_gradient(p, particles, radius):
     d_density = 0
@@ -36,15 +40,12 @@ def calc_density_gradient(p, particles, radius):
         d_density += mass * slope * r_particle
     return d_density
 
-# def calc_property(p, particles, radius):
-#     A = 0
-#     mass = 1
-
-#     for particle in particles:
-#         d = np.linalg.norm(particle.position - p.position)
-#         influence = SmoothingKernel(radius, d)
-#         A += mass * influence / particle.density
-#     return A
+def calc_density_gradient2(p, positions, radius): #Vectorized
+    mass = 1
+    distances = np.linalg.norm(positions - p.position, axis=1)
+    r_particles = np.where(distances[:, None] > 1e-6, (p.position - positions) / distances[:, None], 0.0)
+    slopes = d_SmoothingKernel(radius, distances)
+    return np.sum(mass * slopes[:, None] * r_particles, axis=0)
 
 def calc_shared_pressure(density_A, density_B):
     pressure_A = density_to_pressure(density_A)
@@ -65,9 +66,24 @@ def calc_pressure_force(p, particles, radius):
                 d_P += shared_pressure * mass * slope * r_particle / particle.density
     return d_P
 
+def calc_pressure_force2(p, densities, positions, radius):
+    mass = 1
+    distances = np.linalg.norm(positions - p.position, axis=1)
+    r_particles = np.where(distances[:, None] > 1e-6, (p.position - positions) / distances[:, None], 0.0)
+    slopes = d_SmoothingKernel(radius, distances)
+    shared_pressures = calc_shared_pressure(densities, p.density)
+
+    contributions = np.where(
+    densities[:, None] > 1e-6,  
+    (shared_pressures * mass * slopes)[:, None] * r_particles / densities[:, None],  # Safe division
+    0.0  
+    )   
+
+    return np.sum(contributions, axis=0) 
+
 def density_to_pressure(density):
-    t_density = 20
-    p_multiplier = 5
+    t_density = 1
+    p_multiplier = 10
     e_density = density - t_density
     pressure = e_density * p_multiplier
     return pressure
@@ -121,4 +137,4 @@ def for_each_point_within_radius(sample_point, points, radius, spatial_lookup, s
                     neighbours.append(other_point)
                 i += 1
 
-    return neighbours
+    return neighbours #neighbour positions

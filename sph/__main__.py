@@ -10,12 +10,11 @@ PARTICLE_COLOR = (100, 200, 255)
 SIM_FLOOR_Y = -SCREEN_HEIGHT/2
 
 GRID_SIZE = 20
-MAX_DENSITY = 20  # tune this to adjust brightness scaling
 
 
 def sim_to_screen(pos):
     """Convert simulation coordinates to screen coordinates (flip Y)."""
-    return int(pos[0] + SCREEN_WIDTH // 2), int(SCREEN_HEIGHT - (pos[1] + SCREEN_HEIGHT // 2))
+    return int(pos[0] + SCREEN_WIDTH / 2), int(SCREEN_HEIGHT - (pos[1] + SCREEN_HEIGHT / 2))
 
 def main():
 
@@ -63,7 +62,7 @@ def main():
             x,y = sim_to_screen(p.position)
             pygame.draw.circle(screen, PARTICLE_COLOR, (x,y), PARTICLE_RADIUS)
         pygame.display.flip()
-        clock.tick(60)
+        clock.tick(20)
     
     pygame.quit()
                     
