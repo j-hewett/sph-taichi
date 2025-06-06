@@ -62,7 +62,7 @@ def main():
             x,y = sim_to_screen(p.position)
             pygame.draw.circle(screen, PARTICLE_COLOR, (x,y), PARTICLE_RADIUS)
         pygame.display.flip()
-        clock.tick(20)
+        clock.tick(60)
     
     pygame.quit()
                     
