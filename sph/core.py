@@ -8,16 +8,16 @@ class Simulator:
         self.s_height, self.s_width = s_height, s_width
         self.dt = dt
         self.g = np.array([0, g], dtype=np.float32)
-        self.df = 0.8  ## Damping factor
+        self.df = 0.4  ## Damping factor
 
         self.particle_radius = 5
         self.particle_mass = 1
-        self.smoothingradius = 100
+        self.smoothingradius = 40
 
         self.positions = self.generate_positions(min_dist = (0.5 * self.particle_radius))
         self.velocities = np.zeros((self.N,2), dtype=np.float32)
         self.densities = np.ones(self.N)
-        #self.densities *= (self.s_width*self.s_height)/(self.N * self.particle_mass)
+
     def step(self):
 
         ## Apply gravity and predict future positions
@@ -38,7 +38,7 @@ class Simulator:
                                                         neighbour_positions, self.smoothingradius, self.particle_mass
                                                         )
             P_force = calc_pressure_force2(particle_idx, self.densities[neighbour_idxs],
-                                            neighbour_positions, self.densities, self.positions, self.smoothingradius,
+                                            neighbour_positions, self.densities, future_positions, self.smoothingradius,
                                             self.particle_mass)
             if np.isfinite(self.densities[particle_idx]) and self.densities[particle_idx] > 1e-6:
                 P_accel = P_force / self.densities[particle_idx]

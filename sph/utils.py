@@ -9,9 +9,10 @@ def d_SmoothingKernel(radius, d):
     return np.where(d <= radius, (d - radius) * scale, 0.0)
 
 def calc_density2(p_idx, positions, neighbour_positions, radius, mass): #Vectorized
+    self_contribution = SmoothingKernel(radius, 0.0) * mass  # Self contribution
     distances = np.linalg.norm(neighbour_positions - positions[p_idx], axis=1)
     influences = SmoothingKernel(radius, distances)
-    return np.sum(mass*influences) #sum of densities
+    return self_contribution + np.sum(mass*influences) #sum of densities
 
 def calc_density_gradient2(p_idx, positions, neighbour_positions, radius, mass): #Vectorized
     distances = np.linalg.norm(neighbour_positions - positions[p_idx], axis=1)
@@ -40,7 +41,7 @@ def calc_pressure_force2(p_idx, neighbour_densities, neighbour_positions, densit
 
 def density_to_pressure(density):
     t_density = 0.5
-    p_multiplier = 10
+    p_multiplier = 100
     e_density = density - t_density
     pressure = e_density * p_multiplier
     return pressure

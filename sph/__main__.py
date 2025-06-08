@@ -39,13 +39,13 @@ def main():
 
         if sim_started:
             positions = sim.step()
-            print(len(positions))
         screen.fill(BACKGROUND_COLOR)
         screen_positions = sim_to_screen(positions)
         for pos in screen_positions:
             pygame.draw.circle(screen, PARTICLE_COLOR, pos, PARTICLE_RADIUS)
         pygame.display.flip()
-        clock.tick(60)
+        clock.tick()
+        print(clock.get_fps(), end='\r')
     
     pygame.quit()
                     
