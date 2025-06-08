@@ -1,56 +1,104 @@
 import numpy as np
 from .utils import *
-import copy
-
-
-class Particle:
-    def __init__(self, position, velocity=None, mass=1.0):
-        self.position = np.array(position, dtype=np.float32)
-        self.velocity = np.array(velocity or [0.0, 0.0], dtype=np.float32)
-        self.force = np.zeros(2, dtype=np.float32)
-        self.mass = mass
-        self.density = 0.01
-    
-    def update(self, dt):
-        self.position += self.velocity*dt
 
 class Simulator:
-    def __init__(self, particles, dt=0.05):
-        self.particles = particles
+    def __init__(self, N_particles, s_width, s_height, g=0, dt=1/60):
+
+        self.N = N_particles
+        self.s_height, self.s_width = s_height, s_width
         self.dt = dt
+        self.g = np.array([0, g], dtype=np.float32)
+        self.df = 0.8  ## Damping factor
+
+        self.particle_radius = 5
+        self.particle_mass = 1
         self.smoothingradius = 100
-        self.positions = np.array([particle.position for particle in self.particles])
-        self.densities = np.array([particle.density for particle in self.particles])
-        self.g = np.array([0, 0], dtype=np.float32)
 
+        self.positions = self.generate_positions(min_dist = (0.5 * self.particle_radius))
+        self.velocities = np.zeros((self.N,2), dtype=np.float32)
+        self.densities = np.ones(self.N)
+        #self.densities *= (self.s_width*self.s_height)/(self.N * self.particle_mass)
     def step(self):
-        spatial_lookup, start_indices = update_spatial_lookup(self.particles,self.smoothingradius)
-        particle_neighbours = {
-            p: for_each_point_within_radius(p, self.particles, self.smoothingradius, spatial_lookup, start_indices)
-            for p in self.particles
-        }
-        self.positions = np.array([particle.position for particle in self.particles])
-        self.densities = np.array([particle.density for particle in self.particles])
 
-        for i, particle in enumerate(self.particles):
+        ## Apply gravity and predict future positions
+        self.velocities += self.g * self.dt
+        future_positions = self.positions + self.velocities * self.dt
 
-            neighbours = particle_neighbours[particle]
-            neighbour_densities = np.array([nbr.density for nbr in neighbours])
-            neighbour_positions = np.array([nbr.position for nbr in neighbours])
+        ## Update spatial lookup with fut pos
+        cell_dict = update_spatial_lookup(future_positions,self.smoothingradius)
+        
+        all_neighbours = find_neighbours(future_positions, self.smoothingradius, cell_dict)
 
-            future_particle = copy.deepcopy(particle)
-            future_particle.position = particle.position + particle.velocity * self.dt
+        for particle_idx in range(self.N):
 
-            future_particle.density = calc_density2(future_particle, neighbour_positions, self.smoothingradius)
-            print(future_particle.density)
-            P_force = calc_pressure_force2(future_particle, neighbour_densities, neighbour_positions, self.smoothingradius)
-            particle.density = future_particle.density
+            neighbour_idxs = all_neighbours[particle_idx]
+            neighbour_positions = future_positions[neighbour_idxs]
 
-            P_accel = 0
-            if particle.density>1e-6:
-                P_accel = P_force / particle.density
-            particle.velocity += (P_accel + self.g) * self.dt
-            self.positions[i] += particle.velocity*self.dt
-            particle.position = self.positions[i]
-            self.particles[i] = particle
+            self.densities[particle_idx] = calc_density2(particle_idx, future_positions, 
+                                                        neighbour_positions, self.smoothingradius, self.particle_mass
+                                                        )
+            P_force = calc_pressure_force2(particle_idx, self.densities[neighbour_idxs],
+                                            neighbour_positions, self.densities, self.positions, self.smoothingradius,
+                                            self.particle_mass)
+            if np.isfinite(self.densities[particle_idx]) and self.densities[particle_idx] > 1e-6:
+                P_accel = P_force / self.densities[particle_idx]
+            else:
+                P_accel = 0  # or maybe reset velocity/position
+            self.velocities[particle_idx] += P_accel * self.dt
+
+            self.positions[particle_idx] += self.velocities[particle_idx]*self.dt
+
+        self.resolve_collisions()
+        return self.positions
+
+    def resolve_collisions(self):
+
+        floor_y = -self.s_height/2 + self.particle_radius
+        ceiling_y = self.s_height/2 - self.particle_radius
+        left_x = -self.s_width/2 + self.particle_radius
+        right_x = self.s_width/2 - self.particle_radius
+
+        floor_mask = self.positions[:,1] <= floor_y
+        ceiling_mask = self.positions[:,1] >= ceiling_y
+        left_mask = self.positions[:,0] <= left_x
+        right_mask = self.positions[:,0] >= right_x
+
+        self.positions[floor_mask, 1] = floor_y
+        self.velocities[floor_mask, 1] *= -self.df
+
+        self.positions[ceiling_mask, 1] = ceiling_y
+        self.velocities[ceiling_mask, 1] *= -self.df
+
+        self.positions[left_mask, 0] = left_x
+        self.velocities[left_mask, 0] *= -self.df
+
+        self.positions[right_mask, 0] = right_x
+        self.velocities[right_mask, 0] *= -self.df
+
+    def generate_positions(self, min_dist=1e-2):
+        positions = np.empty((self.N, 2))
+        
+        # Generate first point randomly
+        positions[0] = np.random.uniform(
+            [-0.5 * self.s_width, -0.5 * self.s_height],
+            [0.5 * self.s_width, 0.5 * self.s_height]
+        )
+        
+        # Generate remaining points with distance checking
+        for i in range(1, self.N):
+            while True:
+                new_pos = np.random.uniform(
+                    [-0.5 * self.s_width, -0.5 * self.s_height],
+                    [0.5 * self.s_width, 0.5 * self.s_height]
+                )
+                
+                # Check distance to all existing points
+                distances = np.sqrt(np.sum((positions[:i] - new_pos)**2, axis=1))
+                if np.all(distances >= min_dist):
+                    positions[i] = new_pos
+                    break
+                    
+        return positions
+
+
             

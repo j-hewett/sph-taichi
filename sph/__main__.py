@@ -1,7 +1,6 @@
 import pygame
 import numpy as np
-from sph.core import Particle, Simulator
-from .utils import calc_density
+from sph.core import Simulator
 
 SCREEN_WIDTH, SCREEN_HEIGHT = 800, 600
 PARTICLE_RADIUS = 5
@@ -12,9 +11,13 @@ SIM_FLOOR_Y = -SCREEN_HEIGHT/2
 GRID_SIZE = 20
 
 
-def sim_to_screen(pos):
-    """Convert simulation coordinates to screen coordinates (flip Y)."""
-    return int(pos[0] + SCREEN_WIDTH / 2), int(SCREEN_HEIGHT - (pos[1] + SCREEN_HEIGHT / 2))
+def sim_to_screen(positions):
+    """
+    Convert simulation coordinates to screen coordinates (flip Y) for a (N, 2) array.
+    """
+    screen_x = positions[:, 0] + SCREEN_WIDTH / 2
+    screen_y = SCREEN_HEIGHT - (positions[:, 1] + SCREEN_HEIGHT / 2)
+    return np.stack((screen_x, screen_y), axis=1).astype(np.int32)
 
 def main():
 
@@ -23,15 +26,9 @@ def main():
     clock = pygame.time.Clock()
 
     n_particles = 300
-    df = 0.8
-
-    positions = (np.random.random((n_particles,2)) - 0.55) * np.array([SCREEN_WIDTH, SCREEN_HEIGHT])
-
-    particles = [Particle(position=pos, velocity=[0,0]) for pos in positions]
-
-    sim = Simulator(particles, dt=0.05)
+    sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, dt=1/60)
     sim_started = False
-
+    positions = sim.positions.copy()
     running = True
     while running:
         for event in pygame.event.get():
@@ -41,26 +38,12 @@ def main():
                 sim_started = True
 
         if sim_started:
-            sim.step()
-            for p in particles:
-                if p.position[1] <= SIM_FLOOR_Y + PARTICLE_RADIUS:
-                    p.position[1] = SIM_FLOOR_Y + PARTICLE_RADIUS
-                    p.velocity[1] *= -df
-                elif p.position[1] >= SIM_FLOOR_Y + SCREEN_HEIGHT - PARTICLE_RADIUS:
-                    p.position[1] = SIM_FLOOR_Y + SCREEN_HEIGHT - PARTICLE_RADIUS
-                    p.velocity[1] *= -df
-                if p.position[0] <= -SCREEN_WIDTH / 2 + PARTICLE_RADIUS:
-                    p.position[0] = -SCREEN_WIDTH / 2 + PARTICLE_RADIUS
-                    p.velocity[0] *= -df
-                elif p.position[0] >= SCREEN_WIDTH / 2 - PARTICLE_RADIUS:
-                    p.position[0] = SCREEN_WIDTH / 2 - PARTICLE_RADIUS
-                    p.velocity[0] *= -df
-
+            positions = sim.step()
+            print(len(positions))
         screen.fill(BACKGROUND_COLOR)
-
-        for p in particles:           
-            x,y = sim_to_screen(p.position)
-            pygame.draw.circle(screen, PARTICLE_COLOR, (x,y), PARTICLE_RADIUS)
+        screen_positions = sim_to_screen(positions)
+        for pos in screen_positions:
+            pygame.draw.circle(screen, PARTICLE_COLOR, pos, PARTICLE_RADIUS)
         pygame.display.flip()
         clock.tick(60)
     
