@@ -78,13 +78,13 @@ class Simulator:
     def generate_positions(self, min_dist=1e-2):
         positions = np.empty((self.N, 2))
         
-        # Generate first point randomly
+        ## Generate first point randomly
         positions[0] = np.random.uniform(
             [-0.5 * self.s_width, -0.5 * self.s_height],
             [0.5 * self.s_width, 0.5 * self.s_height]
         )
         
-        # Generate remaining points with distance checking
+        ## Generate remaining points with distance checking
         for i in range(1, self.N):
             while True:
                 new_pos = np.random.uniform(
@@ -92,7 +92,7 @@ class Simulator:
                     [0.5 * self.s_width, 0.5 * self.s_height]
                 )
                 
-                # Check distance to all existing points
+                ## Check distance to all existing points
                 distances = np.sqrt(np.sum((positions[:i] - new_pos)**2, axis=1))
                 if np.all(distances >= min_dist):
                     positions[i] = new_pos
