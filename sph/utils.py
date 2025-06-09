@@ -25,23 +25,36 @@ def calc_shared_pressure(density_A, density_B):
     pressure_B = density_to_pressure(density_B)
     return (pressure_A + pressure_B) / 2
 
-def calc_pressure_force2(p_idx, neighbour_densities, neighbour_positions, densities, positions, radius, mass):
-    distances = np.linalg.norm(neighbour_positions - positions[p_idx], axis=1)
-    r_particles = np.where(distances[:, None] > 1e-6, (positions[p_idx] - neighbour_positions) / distances[:, None], 0.0)
+def calc_pressure_forces(future_positions, densities, flat_i, flat_j, radius, mass):
+    pi = future_positions[flat_i]
+    pj = future_positions[flat_j]
+    rho_i = densities[flat_i]
+    rho_j = densities[flat_j]
+
+    delta = pi - pj
+    distances = np.linalg.norm(delta, axis=1)
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        r_particles = np.where(distances[:, None] > 1e-6, delta / distances[:, None], 0.0)
+
     slopes = d_SmoothingKernel(radius, distances)
-    shared_pressures = calc_shared_pressure(neighbour_densities, densities[p_idx])
+    shared_P = calc_shared_pressure(rho_j, rho_i)
 
-    contributions = np.where(
-    neighbour_densities[:, None] > 1e-6,  
-    (shared_pressures * mass * slopes)[:, None] * r_particles / neighbour_densities[:, None],  # Safe division
-    0.0  
-    )   
+    with np.errstate(divide='ignore', invalid='ignore'):
+        pressure_contribs = np.where(
+            rho_j[:, None] > 1e-6,
+            (shared_P * mass * slopes)[:, None] * r_particles / rho_j[:, None],
+            0.0
+        )
 
-    return np.sum(contributions, axis=0) 
+    P_force = np.zeros((densities.shape[0], 2))
+    np.add.at(P_force, flat_i, pressure_contribs)
+
+    return P_force
 
 def density_to_pressure(density):
     t_density = 0.5
-    p_multiplier = 100
+    p_multiplier = 1000
     e_density = density - t_density
     pressure = e_density * p_multiplier
     return pressure
@@ -70,28 +83,28 @@ def get_key_from_hash(h, length):
 
 def find_neighbours(positions, radius, cell_dict):
     n_particles = positions.shape[0]
-    all_neighbours = [[] for _ in range(n_particles)]
     radius_sq = radius ** 2
+    flat_i = []
+    flat_j = []
+
+    neighbor_offsets = [(dx, dy) for dx in [-1, 0, 1] for dy in [-1, 0, 1]]
 
     for i in range(n_particles):
         x, y = positions[i]
         cx, cy = pos_to_cell_coord(np.array([[x, y]]), radius)[0]
 
-        # Check all 3x3 neighboring cells
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                cell_key = (cx + dx, cy + dy)
-                
-                if cell_key not in cell_dict:
-                    continue  # No particles in this cell
-                
-                # Check all particles in this cell
-                for j in cell_dict[cell_key]:
-                    if j == i:
-                        continue  # Skip self
-                    
-                    delta = positions[i] - positions[j]
-                    if delta @ delta <= radius_sq:
-                        all_neighbours[i].append(j)
-    
-    return all_neighbours
+        for dx, dy in neighbor_offsets:
+            cell_key = (cx + dx, cy + dy)
+
+            if cell_key not in cell_dict:
+                continue
+
+            for j in cell_dict[cell_key]:
+                if j == i:
+                    continue
+                delta = positions[i] - positions[j]
+                if delta @ delta <= radius_sq:
+                    flat_i.append(i)
+                    flat_j.append(j)
+
+    return np.array(flat_i), np.array(flat_j)

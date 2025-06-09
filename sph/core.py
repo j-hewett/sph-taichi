@@ -2,21 +2,21 @@ import numpy as np
 from .utils import *
 
 class Simulator:
-    def __init__(self, N_particles, s_width, s_height, g=0, dt=1/60):
+    def __init__(self, N_particles, s_width, s_height, g=-250, dt=0.05):
 
         self.N = N_particles
         self.s_height, self.s_width = s_height, s_width
         self.dt = dt
         self.g = np.array([0, g], dtype=np.float32)
-        self.df = 0.4  ## Damping factor
+        self.df = 0.6 ## Damping factor
 
         self.particle_radius = 5
         self.particle_mass = 1
-        self.smoothingradius = 40
+        self.smoothingradius = 30
 
         self.positions = self.generate_positions(min_dist = (0.5 * self.particle_radius))
         self.velocities = np.zeros((self.N,2), dtype=np.float32)
-        self.densities = np.ones(self.N)
+        self.densities = np.ones(self.N) * 0.5
 
     def step(self):
 
@@ -27,29 +27,37 @@ class Simulator:
         ## Update spatial lookup with fut pos
         cell_dict = update_spatial_lookup(future_positions,self.smoothingradius)
         
-        all_neighbours = find_neighbours(future_positions, self.smoothingradius, cell_dict)
+        ## Find neighbours, i = target, j = neighbours
+        neighbours_i, neighbours_j = find_neighbours(future_positions, self.smoothingradius, cell_dict)
 
-        for particle_idx in range(self.N):
+        ## Compute all distances at once
+        pi = future_positions[neighbours_i]
+        pj = future_positions[neighbours_j]
+        distances = np.linalg.norm(pi - pj, axis=1)
 
-            neighbour_idxs = all_neighbours[particle_idx]
-            neighbour_positions = future_positions[neighbour_idxs]
+        ## Compute kernel values and accumulate
+        influences = SmoothingKernel(self.smoothingradius, distances) * self.particle_mass
+        self.densities = np.zeros(self.N)
+        np.add.at(self.densities, neighbours_i, influences)
 
-            self.densities[particle_idx] = calc_density2(particle_idx, future_positions, 
-                                                        neighbour_positions, self.smoothingradius, self.particle_mass
-                                                        )
-            P_force = calc_pressure_force2(particle_idx, self.densities[neighbour_idxs],
-                                            neighbour_positions, self.densities, future_positions, self.smoothingradius,
-                                            self.particle_mass)
-            if np.isfinite(self.densities[particle_idx]) and self.densities[particle_idx] > 1e-6:
-                P_accel = P_force / self.densities[particle_idx]
-            else:
-                P_accel = 0  # or maybe reset velocity/position
-            self.velocities[particle_idx] += P_accel * self.dt
+        ## Add self contribution
+        self_contrib = SmoothingKernel(self.smoothingradius, 0.0) * self.particle_mass
+        self.densities += self_contrib
 
-            self.positions[particle_idx] += self.velocities[particle_idx]*self.dt
+        P_force = calc_pressure_forces(future_positions, self.densities, neighbours_i, neighbours_j, self.smoothingradius, self.particle_mass)
+
+        ## Update velocities (only where density is valid)
+        valid = np.isfinite(self.densities) & (self.densities > 1e-6)
+        P_accel = np.zeros_like(P_force)
+        P_accel[valid] = P_force[valid] / self.densities[valid][:, np.newaxis]
+
+        self.velocities += P_accel * self.dt
+
+        ## Update positions
+        self.positions += self.velocities * self.dt
 
         self.resolve_collisions()
-        return self.positions
+        return self.positions, self.velocities
 
     def resolve_collisions(self):
 
@@ -78,18 +86,15 @@ class Simulator:
     def generate_positions(self, min_dist=1e-2):
         positions = np.empty((self.N, 2))
         
-        ## Generate first point randomly
-        positions[0] = np.random.uniform(
-            [-0.5 * self.s_width, -0.5 * self.s_height],
-            [0.5 * self.s_width, 0.5 * self.s_height]
-        )
+        ## Generate first point
+        positions[0] = [0,0]
         
         ## Generate remaining points with distance checking
         for i in range(1, self.N):
             while True:
                 new_pos = np.random.uniform(
-                    [-0.5 * self.s_width, -0.5 * self.s_height],
-                    [0.5 * self.s_width, 0.5 * self.s_height]
+                    [-0.5 * self.s_width*0.65, -0.5 * self.s_height*0.65],
+                    [0.5 * self.s_width*0.65, 0.5 * self.s_height*0.65]
                 )
                 
                 ## Check distance to all existing points
