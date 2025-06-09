@@ -1,4 +1,35 @@
 import numpy as np
+from collections import defaultdict
+
+def normalized(a, axis=-1, order=2):
+    l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
+    l2[l2==0] = 1
+    return a / np.expand_dims(l2, axis)
+
+def resolve_collisions(positions, velocities, particle_radius, s_width, s_height, df):
+    floor_y = -s_height/2 + particle_radius
+    ceiling_y = s_height/2 - particle_radius
+    left_x = -s_width/2 + particle_radius
+    right_x = s_width/2 - particle_radius
+
+    floor_mask = positions[:,1] <= floor_y
+    ceiling_mask = positions[:,1] >= ceiling_y
+    left_mask = positions[:,0] <= left_x
+    right_mask = positions[:,0] >= right_x
+
+    positions[floor_mask, 1] = floor_y
+    velocities[floor_mask, 1] *= -df
+
+    positions[ceiling_mask, 1] = ceiling_y
+    velocities[ceiling_mask, 1] *= -df
+
+    positions[left_mask, 0] = left_x
+    velocities[left_mask, 0] *= -df
+
+    positions[right_mask, 0] = right_x
+    velocities[right_mask, 0] *= -df
+
+    return positions, velocities
 
 def SmoothingKernel(radius, d):
     vol = (np.pi * np.power(radius,4))/6
@@ -14,12 +45,6 @@ def calc_density2(p_idx, positions, neighbour_positions, radius, mass): #Vectori
     influences = SmoothingKernel(radius, distances)
     return self_contribution + np.sum(mass*influences) #sum of densities
 
-def calc_density_gradient2(p_idx, positions, neighbour_positions, radius, mass): #Vectorized
-    distances = np.linalg.norm(neighbour_positions - positions[p_idx], axis=1)
-    r_particles = np.where(distances[:, None] > 1e-6, (positions[p_idx] - neighbour_positions) / distances[:, None], 0.0)
-    slopes = d_SmoothingKernel(radius, distances)
-    return np.sum(mass * slopes[:, None] * r_particles, axis=0)
-
 def calc_shared_pressure(density_A, density_B):
     pressure_A = density_to_pressure(density_A)
     pressure_B = density_to_pressure(density_B)
@@ -30,18 +55,16 @@ def calc_pressure_forces(future_positions, densities, flat_i, flat_j, radius, ma
     pj = future_positions[flat_j]
     rho_i = densities[flat_i]
     rho_j = densities[flat_j]
+    mass = np.float32(mass)
+    radius = np.float32(radius)
 
     delta = pi - pj
-    distances = np.linalg.norm(delta, axis=1)
+    r_particles = normalized(delta, axis=1)
+    slopes = d_SmoothingKernel(radius, np.linalg.norm(delta, axis=1))
 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        r_particles = np.where(distances[:, None] > 1e-6, delta / distances[:, None], 0.0)
-
-    slopes = d_SmoothingKernel(radius, distances)
     shared_P = calc_shared_pressure(rho_j, rho_i)
 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        pressure_contribs = np.where(
+    pressure_contribs = np.where(
             rho_j[:, None] > 1e-6,
             (shared_P * mass * slopes)[:, None] * r_particles / rho_j[:, None],
             0.0
@@ -52,28 +75,45 @@ def calc_pressure_forces(future_positions, densities, flat_i, flat_j, radius, ma
 
     return P_force
 
+def calc_viscosity_forces(future_positions, velocities, flat_i, flat_j, radius):
+    pi = future_positions[flat_i]
+    pj = future_positions[flat_j]
+
+    radius = np.float32(radius)
+
+    delta = pi - pj
+    slopes = d_SmoothingKernel(radius, np.linalg.norm(delta, axis=1))
+
+    viscosity_contribs = (velocities[flat_j] - velocities[flat_i]) * slopes[:, None]
+
+    V_force = np.zeros((velocities.shape[0], 2))
+    np.add.at(V_force, flat_i, viscosity_contribs)
+
+    return V_force
+
+
+
 def density_to_pressure(density):
-    t_density = 0.5
-    p_multiplier = 1000
+    t_density = np.float32(0.5)
+    p_multiplier = np.float32(3000)
     e_density = density - t_density
     pressure = e_density * p_multiplier
     return pressure
-    
+
+
 def update_spatial_lookup(positions, radius):
     cell_coords = pos_to_cell_coord(positions, radius)
     
-    # Build a dictionary: { (cell_x, cell_y): [particle_indices] }
-    cell_dict = {}
-    for idx, (x, y) in enumerate(cell_coords):
-        key = (x, y)
-        if key not in cell_dict:
-            cell_dict[key] = []
+    cell_keys = [tuple(cell) for cell in cell_coords]
+
+    cell_dict = defaultdict(list)
+    for idx, key in enumerate(cell_keys):
         cell_dict[key].append(idx)
     
-    return cell_dict
+    return dict(cell_dict)
 
 def pos_to_cell_coord(pos_array, radius):
-    return np.floor(pos_array / radius).astype(int)
+    return np.floor_divide(pos_array, radius)
 
 def hash_cell(cell_x, cell_y):
     return (cell_x * 15823) + (cell_y * 9737333)

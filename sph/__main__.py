@@ -2,8 +2,7 @@ import pygame
 import numpy as np
 from sph.core import Simulator
 
-SCREEN_WIDTH, SCREEN_HEIGHT = 1200, 600
-PARTICLE_RADIUS = 5
+SCREEN_WIDTH, SCREEN_HEIGHT = 1000, 600
 BACKGROUND_COLOR = (30, 30, 30)
 PARTICLE_COLOR = (100, 200, 255)
 SIM_FLOOR_Y = -SCREEN_HEIGHT/2
@@ -19,19 +18,19 @@ def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     clock = pygame.time.Clock()
 
-    n_particles = 600
+    n_particles = 1200
+    particle_radius = 4
     
     start_color = np.array([100, 200, 255])
     end_color = np.array([255, 100, 100])
-    max_cap = 100.0
+    max_cap = 150.0
 
-    sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, dt=0.025)
+    sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, particle_radius, dt=1/100)
     sim_started = False
     positions = sim.positions.copy()
     velocities = sim.velocities.copy()
     running = True
     while running:
-        userForce = 0
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -52,7 +51,7 @@ def main():
         screen.fill(BACKGROUND_COLOR)
         screen_positions = sim_to_screen(positions)
         for pos, color in zip(screen_positions, colors):
-            pygame.draw.circle(screen, color, pos, PARTICLE_RADIUS)
+            pygame.draw.circle(screen, color, pos, particle_radius)
         pygame.display.flip()
         clock.tick()
         print(clock.get_fps(), end='\r')

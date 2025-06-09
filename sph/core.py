@@ -2,17 +2,18 @@ import numpy as np
 from .utils import *
 
 class Simulator:
-    def __init__(self, N_particles, s_width, s_height, g=-250, dt=0.05):
+    def __init__(self, N_particles, s_width, s_height, particle_radius, dt, g=-200):
 
         self.N = N_particles
         self.s_height, self.s_width = s_height, s_width
         self.dt = dt
         self.g = np.array([0, g], dtype=np.float32)
-        self.df = 0.6 ## Damping factor
+        self.df = 0.4 ## Damping factor
+        self.viscosity = 0.3
 
-        self.particle_radius = 5
+        self.particle_radius = particle_radius
         self.particle_mass = 1
-        self.smoothingradius = 30
+        self.smoothingradius = 2 * 2 * particle_radius
 
         self.positions = self.generate_positions(min_dist = (0.5 * self.particle_radius))
         self.velocities = np.zeros((self.N,2), dtype=np.float32)
@@ -22,7 +23,7 @@ class Simulator:
 
         ## Apply gravity and predict future positions
         self.velocities += self.g * self.dt
-        future_positions = self.positions + self.velocities * self.dt
+        future_positions = self.positions + self.velocities * 1/60 ## const lookahead time
 
         ## Update spatial lookup with fut pos
         cell_dict = update_spatial_lookup(future_positions,self.smoothingradius)
@@ -51,37 +52,19 @@ class Simulator:
         P_accel = np.zeros_like(P_force)
         P_accel[valid] = P_force[valid] / self.densities[valid][:, np.newaxis]
 
-        self.velocities += P_accel * self.dt
+        V_force = calc_viscosity_forces(future_positions, self.velocities, neighbours_i, neighbours_j, self.smoothingradius)
+        V_force *= self.viscosity
+        V_accel = np.zeros_like(V_force)
+        V_accel[valid] = V_force[valid] / self.densities[valid][:, np.newaxis]
+
+        self.velocities += (P_accel + V_accel) * self.dt
 
         ## Update positions
         self.positions += self.velocities * self.dt
 
-        self.resolve_collisions()
+        self.positions, self.velocities = resolve_collisions(self.positions, self.velocities, self.particle_radius, self.s_width, self.s_height, self.df)
+        
         return self.positions, self.velocities
-
-    def resolve_collisions(self):
-
-        floor_y = -self.s_height/2 + self.particle_radius
-        ceiling_y = self.s_height/2 - self.particle_radius
-        left_x = -self.s_width/2 + self.particle_radius
-        right_x = self.s_width/2 - self.particle_radius
-
-        floor_mask = self.positions[:,1] <= floor_y
-        ceiling_mask = self.positions[:,1] >= ceiling_y
-        left_mask = self.positions[:,0] <= left_x
-        right_mask = self.positions[:,0] >= right_x
-
-        self.positions[floor_mask, 1] = floor_y
-        self.velocities[floor_mask, 1] *= -self.df
-
-        self.positions[ceiling_mask, 1] = ceiling_y
-        self.velocities[ceiling_mask, 1] *= -self.df
-
-        self.positions[left_mask, 0] = left_x
-        self.velocities[left_mask, 0] *= -self.df
-
-        self.positions[right_mask, 0] = right_x
-        self.velocities[right_mask, 0] *= -self.df
 
     def generate_positions(self, min_dist=1e-2):
         positions = np.empty((self.N, 2))
@@ -104,6 +87,3 @@ class Simulator:
                     break
                     
         return positions
-
-
-            
