@@ -1,62 +1,91 @@
-import pygame
+import glfw
 import numpy as np
+import moderngl
 from sph.core import Simulator
 
 SCREEN_WIDTH, SCREEN_HEIGHT = 1000, 600
-BACKGROUND_COLOR = (30, 30, 30)
-PARTICLE_COLOR = (100, 200, 255)
-SIM_FLOOR_Y = -SCREEN_HEIGHT/2
 
-
-def sim_to_screen(positions):
-    screen_x = positions[:, 0] + SCREEN_WIDTH / 2
-    screen_y = SCREEN_HEIGHT - (positions[:, 1] + SCREEN_HEIGHT / 2)
-    return np.stack((screen_x, screen_y), axis=1).astype(np.int32)
+def sim_to_ndc(positions):
+    x = positions[:, 0] / (SCREEN_WIDTH / 2)
+    y = positions[:, 1] / (SCREEN_HEIGHT / 2)
+    return np.stack((x, y), axis=1).astype('f4')
 
 def main():
-    pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    clock = pygame.time.Clock()
+    try:
 
-    n_particles = 1200
-    particle_radius = 4
-    
-    start_color = np.array([100, 200, 255])
-    end_color = np.array([255, 100, 100])
-    max_cap = 150.0
+        #Initialise GLFW
+        if not glfw.init():
+            raise Exception("GLFW could not be initialised.")
+        
+        window = glfw.create_window(SCREEN_WIDTH, SCREEN_HEIGHT, "SPH Fluid Simulation with modernGL", None, None)
 
-    sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, particle_radius, dt=1/100)
-    sim_started = False
-    positions = sim.positions.copy()
-    velocities = sim.velocities.copy()
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                sim_started = True
+        if not window:
+            glfw.terminate()
+            raise Exception("GLFW window could not be initialised.")
 
-        if sim_started:
-            positions, velocities = sim.step()
-        speeds = np.linalg.norm(velocities, axis=1)
-        capped_speeds = np.clip(speeds, 0, max_cap)
-        norm_speeds = capped_speeds / max_cap
+        # Make the context current
+        glfw.make_context_current(window)
 
-        ## Interpolate colors
-        t = norm_speeds[:, None]  # shape (N,1)
-        colors = ((1 - t) * start_color + t * end_color).astype(np.uint8)
+        ctx = moderngl.create_context()
+        
+        ctx.gc_mode = 'context_gc'
+        ctx.enable_only(moderngl.BLEND | moderngl.PROGRAM_POINT_SIZE)
 
-        ## Draw particles
-        screen.fill(BACKGROUND_COLOR)
-        screen_positions = sim_to_screen(positions)
-        for pos, color in zip(screen_positions, colors):
-            pygame.draw.circle(screen, color, pos, particle_radius)
-        pygame.display.flip()
-        clock.tick()
-        print(clock.get_fps(), end='\r')
-    
-    pygame.quit()
+        vertex_shader= '''
+        #version 330
+        in vec2 in_pos;
+        void main() {
+
+            gl_Position = vec4(in_pos, 0.0, 1.0);
+            gl_PointSize = 8; // Size of the point
+        }
+        '''
+
+        fragment_shader='''
+        #version 330
+        out vec4 fragColor;
+        void main() {
+            fragColor = vec4(1.0, 1.0, 1.0, 1.0);
+        }
+        '''
+
+        prog = ctx.program(vertex_shader = vertex_shader, fragment_shader = fragment_shader)
+
+
+        n_particles = 1200
+        sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 4, dt=1/50)
+        sim_started = False
+        positions = sim_to_ndc(sim.positions.copy())
+
+        vbo = ctx.buffer(positions.tobytes())
+        vao = ctx.vertex_array(prog, vbo, 'in_pos')
+
+        while not glfw.window_should_close(window):
+            glfw.poll_events()
+
+            positions, _ = sim.step()
+
+            NDC_positions = sim_to_ndc(positions)
+            vbo.write(NDC_positions.tobytes())
+
+            ctx.clear(0.1, 0.2, 0.3, 1.0)
+
+            vao.render(mode=moderngl.POINTS)
+            ctx.finish()
+
+            glfw.swap_buffers(window)
+
+    finally:
+        prog.release()
+        vbo.release()
+        vao.release()
+        ctx.release()
+        glfw.terminate()
+
+
+
+
+        
                     
 
 if __name__ == "__main__":

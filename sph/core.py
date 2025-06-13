@@ -8,8 +8,8 @@ class Simulator:
         self.s_height, self.s_width = s_height, s_width
         self.dt = dt
         self.g = np.array([0, g], dtype=np.float32)
-        self.df = 0.4 ## Damping factor
-        self.viscosity = 0.3
+        self.df = 0.6 ## Damping factor
+        self.viscosity = 0.5
 
         self.particle_radius = particle_radius
         self.particle_mass = 1
