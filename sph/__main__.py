@@ -29,7 +29,9 @@ def main():
         ctx = moderngl.create_context()
         
         ctx.gc_mode = 'context_gc'
-        ctx.enable_only(moderngl.BLEND | moderngl.PROGRAM_POINT_SIZE)
+        ctx.enable(moderngl.BLEND)
+        ctx.blend_func = moderngl.DEFAULT_BLENDING
+        ctx.point_size = 6
 
         vertex_shader= '''
         #version 330
@@ -37,7 +39,6 @@ def main():
         void main() {
 
             gl_Position = vec4(in_pos, 0.0, 1.0);
-            gl_PointSize = 8; // Size of the point
         }
         '''
 
@@ -45,7 +46,8 @@ def main():
         #version 330
         out vec4 fragColor;
         void main() {
-            fragColor = vec4(1.0, 1.0, 1.0, 1.0);
+
+            fragColor = vec4(1.0, 1.0, 1.0, alpha);
         }
         '''
 
@@ -53,8 +55,7 @@ def main():
 
 
         n_particles = 1200
-        sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 4, dt=1/50)
-        sim_started = False
+        sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 4, dt=1/120)
         positions = sim_to_ndc(sim.positions.copy())
 
         vbo = ctx.buffer(positions.tobytes())
@@ -80,13 +81,7 @@ def main():
         vbo.release()
         vao.release()
         ctx.release()
-        glfw.terminate()
-
-
-
-
-        
-                    
+        glfw.terminate()  
 
 if __name__ == "__main__":
     main()
