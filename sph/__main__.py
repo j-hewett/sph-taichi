@@ -1,6 +1,5 @@
 import taichi as ti
 from sph.core import Simulator
-import numpy as np
 
 SCREEN_WIDTH, SCREEN_HEIGHT = 1280, 720
 
