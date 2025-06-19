@@ -1,155 +1,208 @@
-import numpy as np
-from .utils import *
+import taichi as ti
 
+
+ti.init(arch=ti.gpu)  ## Use GPU acceleration
+
+
+@ti.data_oriented
 class Simulator:
-    def __init__(self, N_particles, s_width, s_height, particle_radius, dt, g=-100):
-
+    def __init__(self, N_particles, s_width, s_height, particle_radius, dt, g=-200):
         self.N = N_particles
         self.s_height, self.s_width = s_height, s_width
         self.dt = dt
-        self.g = np.array([0, g], dtype=np.float32)
-        self.df = 0.6 ## Damping factor
-        self.viscosity = 0.5
+        self.lookahead = 1/60
+        self.g = ti.Vector([0, g], dt=ti.f32)
+        self.df = 0.4 ## Damping factor
+        self.viscosity = 0.8
+
+        self.t_density = 0.5
+        self.p_multiplier = 1000
 
         self.particle_radius = particle_radius
-        self.mass = np.float32(1)
-        self.sradius = np.float32(2 * 2 * particle_radius)
+        self.mass = 1
+        self.sradius = 2 * 2 * particle_radius
 
-        self.positions = self.generate_positions(min_dist = (0.5 * self.particle_radius))
-        self.velocities = np.zeros((self.N,2), dtype=np.float32)
-        self.densities = np.ones(self.N) * 0.5
+        ## Taichi fields for particle data
+        self.positions = ti.Vector.field(2, dtype=ti.f32, shape=N_particles)
+        self.velocities = ti.Vector.field(2, dtype=ti.f32, shape=N_particles)
+        self.densities = ti.field(dtype=ti.f32, shape=N_particles)
+        self.pressure_forces = ti.Vector.field(2, dtype=ti.f32, shape=N_particles)
+        self.viscosity_forces = ti.Vector.field(2, dtype=ti.f32, shape=N_particles)
 
+        self.future_positions = ti.Vector.field(2, dtype=ti.f32, shape=self.N)
+
+        ## Spatial hashing
+        self.max_particles_per_cell = 32
+        self.grid_size = 128
+        self.cell_list = ti.field(dtype=ti.i32, shape=(self.grid_size, self.grid_size, self.max_particles_per_cell))
+        self.cell_count = ti.field(dtype=ti.i32, shape=(self.grid_size, self.grid_size))
+        self.cell_coords = ti.Vector.field(2, dtype=ti.i32, shape=self.N)
+
+        ## Boundary conditions
         self.floor_y = -s_height/2 + particle_radius
         self.ceiling_y = s_height/2 - particle_radius
         self.left_x = -s_width/2 + particle_radius
         self.right_x = s_width/2 - particle_radius
 
-    def step(self):
+        self.screen_positions = ti.Vector.field(2, ti.f32, shape=self.N)
 
-        ## Apply gravity and predict future positions
-        self.velocities += self.g * self.dt
-        future_positions = self.positions + self.velocities * self.dt ## const lookahead time
+        self.initialize_particles()
 
-        ## Update spatial lookup with fut pos
-        cell_dict = update_spatial_lookup(future_positions,self.sradius)
-        
-        ## Find neighbours, i = target, j = neighbours
-        neighbours_i = []
-        neighbours_j = []
-
-        neighbor_offsets = [(dx, dy) for dx in [-1, 0, 1] for dy in [-1, 0, 1]]
-
+    @ti.kernel
+    def initialize_particles(self):
         for i in range(self.N):
-            x, y = future_positions[i]
-            cx, cy = pos_to_cell_coord(np.array([[x, y]]), self.sradius)[0]
+            ## Generate positions with some randomness
+            self.positions[i] = ti.Vector([
+                ti.random() * self.s_width * 0.65 - self.s_width * 0.325,
+                ti.random() * self.s_height * 0.65 - self.s_height * 0.325
+            ])
+            self.velocities[i] = ti.Vector([0.0, 0.0])
+            self.densities[i] = 0.1
 
-            for dx, dy in neighbor_offsets:
-                cell_key = (cx + dx, cy + dy)
+    @ti.func
+    def smoothing_kernel(self, radius, d):
+        vol = (ti.math.pi * ti.pow(radius, 4)) / 6
+        result = 0.0
+        if d <= radius:
+            result = ti.pow(radius - d, 2) / vol
+        return result
 
-                if cell_key not in cell_dict:
-                    continue
+    @ti.func
+    def d_smoothing_kernel(self, radius, d):
+        scale = 12 / (ti.math.pi * ti.pow(radius, 4))
+        result = 0.0
+        if d <= radius:
+            result = (d - radius) * scale
+        return result
 
-                for j in cell_dict[cell_key]:
-                    if j == i:
-                        continue
-                    delta = future_positions[i] - future_positions[j]
-                    if delta @ delta <= (self.sradius ** 2):
-                        neighbours_i.append(i)
-                        neighbours_j.append(j)
+    @ti.func
+    def density_to_pressure(self, density):
+        e_density = density - self.t_density
+        return e_density * self.p_multiplier
 
-        neighbours_i = np.array(neighbours_i)
-        neighbours_j = np.array(neighbours_j)
+    @ti.func
+    def calc_shared_pressure(self, density_A, density_B):
+        pressure_A = self.density_to_pressure(density_A)
+        pressure_B = self.density_to_pressure(density_B)
+        return (pressure_A + pressure_B) / 2
 
-        ## Compute all distances at once
-        pi = future_positions[neighbours_i]
-        pj = future_positions[neighbours_j]
-        distances = np.linalg.norm(pi - pj, axis=1)
+    @ti.func
+    def pos_to_cell_coord(self, pos):
+        cell_x = int(ti.floor((pos.x + self.s_width/2) / self.sradius))
+        cell_y = int(ti.floor((pos.y + self.s_height/2) / self.sradius))
+        cell_x = ti.max(0, ti.min(self.grid_size - 1, cell_x))
+        cell_y = ti.max(0, ti.min(self.grid_size - 1, cell_y))
+        return cell_x, cell_y
+    
+    @ti.kernel
+    def predict_positions_and_cells(self):
+        for i in range(self.N):
+            future_pos = self.positions[i] + self.velocities[i] * self.lookahead
+            self.future_positions[i] = future_pos
 
-        ## Compute kernel values and accumulate
-        influences = SmoothingKernel(self.sradius, distances) * self.mass
-        self.densities = np.zeros(self.N)
-        np.add.at(self.densities, neighbours_i, influences)
+            cell_x, cell_y = self.pos_to_cell_coord(future_pos)
+            self.cell_coords[i] = ti.Vector([cell_x, cell_y])
 
-        ## Add self contribution
-        self_contrib = SmoothingKernel(self.sradius, 0.0) * self.mass
-        self.densities += self_contrib
+    @ti.kernel
+    def update_spatial_lookup(self):
+        for i, j in ti.ndrange(self.grid_size, self.grid_size):
+            self.cell_count[i, j] = 0
 
-        ## Calculate pressure forces
-        rho_i = self.densities[neighbours_i]
-        rho_j = self.densities[neighbours_j]
-        delta = pi - pj
-        r_particles = normalized(delta, axis=1)
-        slopes = d_SmoothingKernel(self.sradius, np.linalg.norm(delta, axis=1))
+        for p in range(self.N):
+            cell = self.cell_coords[p]
+            old_count = ti.atomic_add(self.cell_count[cell.x, cell.y], 1)
+            if old_count < self.max_particles_per_cell:
+                self.cell_list[cell.x, cell.y, old_count] = p
 
-        shared_P = calc_shared_pressure(rho_j, rho_i)
+    @ti.kernel
+    def compute_densities_and_forces(self):
+        ## Reset values
+        for i in range(self.N):
+            self.densities[i] = 0.0
+            self.pressure_forces[i] = ti.Vector([0.0, 0.0])
+            self.viscosity_forces[i] = ti.Vector([0.0, 0.0])
 
-        pressure_contribs = np.where(
-                rho_j[:, None] > 1e-6,
-                (shared_P * self.mass * slopes)[:, None] * r_particles / rho_j[:, None],
-                0.0
-            )
-
-        P_force = np.zeros((self.densities.shape[0], 2))
-        np.add.at(P_force, neighbours_i, pressure_contribs)
-
-        ## Update velocities (only where density is valid)
-        valid = np.isfinite(self.densities) & (self.densities > 1e-6)
-        P_accel = np.zeros_like(P_force)
-        P_accel[valid] = P_force[valid] / self.densities[valid][:, np.newaxis]
-
-        ## Calculate viscosity forces
-        viscosity_contribs = (self.velocities[neighbours_j] - self.velocities[neighbours_i]) * slopes[:, None]
-        V_force = np.zeros((self.velocities.shape[0], 2))
-        np.add.at(V_force, neighbours_i, viscosity_contribs)
-        
-        V_force *= self.viscosity
-        V_accel = np.zeros_like(V_force)
-        V_accel[valid] = V_force[valid] / self.densities[valid][:, np.newaxis]
-
-        ## Update velocities
-        self.velocities += (P_accel + V_accel) * self.dt
-
-        ## Update positions
-        self.positions += self.velocities * self.dt
-        
-        ## Resolve collisions
-        floor_mask = self.positions[:,1] <= self.floor_y
-        ceiling_mask = self.positions[:,1] >= self.ceiling_y
-        left_mask = self.positions[:,0] <= self.left_x
-        right_mask = self.positions[:,0] >= self.right_x
-
-        self.positions[floor_mask, 1] = self.floor_y
-        self.velocities[floor_mask, 1] *= -self.df
-
-        self.positions[ceiling_mask, 1] = self.ceiling_y
-        self.velocities[ceiling_mask, 1] *= -self.df
-
-        self.positions[left_mask, 0] = self.left_x
-        self.velocities[left_mask, 0] *= -self.df
-
-        self.positions[right_mask, 0] = self.right_x
-        self.velocities[right_mask, 0] *= -self.df
-
-        return self.positions, self.velocities
-
-    def generate_positions(self, min_dist=1e-2):
-        positions = np.empty((self.N, 2))
-        
-        ## Generate first point
-        positions[0] = [0,0]
-        
-        ## Generate remaining points with distance checking
-        for i in range(1, self.N):
-            while True:
-                new_pos = np.random.uniform(
-                    [-0.5 * self.s_width*0.65, -0.5 * self.s_height*0.65],
-                    [0.5 * self.s_width*0.65, 0.5 * self.s_height*0.65]
-                )
+        ## Main computation
+        for i in range(self.N):
+            pos_i = self.future_positions[i]
+            vel_i = self.velocities[i]
+            cell = self.cell_coords[i]
+            
+            ## Self-contribution to density
+            self.densities[i] += self.smoothing_kernel(self.sradius, 0.0) * self.mass
+            
+            ## Neighbor processing
+            for dx, dy in ti.static(ti.ndrange(3, 3)):
+                nx, ny = cell.x + dx - 1, cell.y + dy - 1 
                 
-                ## Check distance to all existing points
-                distances = np.sqrt(np.sum((positions[:i] - new_pos)**2, axis=1))
-                if np.all(distances >= min_dist):
-                    positions[i] = new_pos
-                    break
-                    
-        return positions
+                if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
+                    for k in range(self.cell_count[nx, ny]):
+                        j = self.cell_list[nx, ny, k]
+                        if i == j:
+                            continue
+                            
+                        pos_j = self.future_positions[j]
+                        delta = pos_i - pos_j
+                        distance = delta.norm()
+                        
+                        if distance <= self.sradius and distance > 1e-6:
+                            kernel_val = self.smoothing_kernel(self.sradius, distance)
+                            self.densities[i] += kernel_val * self.mass
+
+                            r_normalized = delta / distance
+                            slope = self.d_smoothing_kernel(self.sradius, distance)
+                            
+                            if self.densities[j] > 1e-6:
+                                shared_p = self.calc_shared_pressure(self.densities[j], self.densities[i])
+                                self.pressure_forces[i] += (shared_p * self.mass * slope) * r_normalized / self.densities[j]
+                            
+                            vel_diff = self.velocities[j] - vel_i
+                            self.viscosity_forces[i] += vel_diff * (self.viscosity * slope)
+
+    @ti.kernel
+    def integrate(self):
+        for i in range(self.N):
+            ## Apply gravity
+            self.velocities[i] += self.g * self.dt
+            
+            ## Apply pressure and viscosity forces
+            if self.densities[i] > 1e-6:
+                pressure_accel = self.pressure_forces[i] / self.densities[i]
+                viscosity_accel = self.viscosity_forces[i] / self.densities[i]
+                self.velocities[i] += (pressure_accel + viscosity_accel) * self.dt
+            
+            ## Update positions
+            self.positions[i] += self.velocities[i] * self.dt
+            
+            ## Handle boundary collisions
+            if self.positions[i].y <= self.floor_y:
+                self.positions[i].y = self.floor_y
+                self.velocities[i].y *= -self.df
+            
+            if self.positions[i].y >= self.ceiling_y:
+                self.positions[i].y = self.ceiling_y
+                self.velocities[i].y *= -self.df
+            
+            if self.positions[i].x <= self.left_x:
+                self.positions[i].x = self.left_x
+                self.velocities[i].x *= -self.df
+            
+            if self.positions[i].x >= self.right_x:
+                self.positions[i].x = self.right_x
+                self.velocities[i].x *= -self.df
+
+    @ti.kernel
+    def compute_screen_positions(self):
+        for i in range(self.N):
+            pos = self.positions[i]
+            self.screen_positions[i] = (pos + ti.Vector([self.s_width / 2, self.s_height / 2])) / ti.Vector([self.s_width, self.s_height])
+
+
+    def step(self, dt):
+        self.dt = dt
+        self.predict_positions_and_cells()
+        self.update_spatial_lookup()
+        self.compute_densities_and_forces()
+        self.integrate()
+        self.compute_screen_positions()
+        return self.screen_positions

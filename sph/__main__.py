@@ -1,87 +1,58 @@
-import glfw
-import numpy as np
-import moderngl
+import taichi as ti
 from sph.core import Simulator
+import numpy as np
 
-SCREEN_WIDTH, SCREEN_HEIGHT = 1000, 600
+SCREEN_WIDTH, SCREEN_HEIGHT = 1280, 720
 
-def sim_to_ndc(positions):
-    x = positions[:, 0] / (SCREEN_WIDTH / 2)
-    y = positions[:, 1] / (SCREEN_HEIGHT / 2)
-    return np.stack((x, y), axis=1).astype('f4')
+@ti.data_oriented
+class Renderer:
+    def __init__(self, n_particles):
+        self.canvas = ti.Vector.field(3, dtype=ti.f32, shape=(SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.screen_pos = ti.Vector.field(2, dtype=ti.f32, shape=n_particles)
+        self.radius = 3
+        self.radius_sq = self.radius * self.radius
+        self.bg_color = ti.Vector([0.07, 0.18, 0.25])  ## Dark blue
+        self.particle_color = ti.Vector([0.1, 0.8, 0.5])  ## White
+
+    @ti.kernel
+    def clear_canvas(self):
+        for i, j in self.canvas:
+            self.canvas[i, j] = self.bg_color
+
+    @ti.kernel
+    def draw_particles(self):
+        for p in range(self.screen_pos.shape[0]):
+            x = ti.cast(self.screen_pos[p][0] * SCREEN_WIDTH, ti.i32)
+            y = ti.cast(self.screen_pos[p][1] * SCREEN_HEIGHT, ti.i32)
+            
+            ## Draw circle using bounding box
+            for dy in range(-self.radius, self.radius + 1):
+                for dx in range(-self.radius, self.radius + 1):
+                    px = x + dx
+                    py = y + dy
+                    if 0 <= px < SCREEN_WIDTH and 0 <= py < SCREEN_HEIGHT:
+                        if dx*dx + dy*dy <= self.radius_sq:
+                            self.canvas[px, py] = self.particle_color
 
 def main():
-    try:
+    n_particles = 6000
+    gui = ti.GUI("SPH Fluid Simulation", res=(SCREEN_WIDTH, SCREEN_HEIGHT), fast_gui=True)
+    renderer = Renderer(n_particles)
 
-        #Initialise GLFW
-        if not glfw.init():
-            raise Exception("GLFW could not be initialised.")
+    dt = 1/120
+
+    sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 3, dt)
+
+    while gui.running:
+        ## Update renderer
+        renderer.screen_pos = sim.step(dt)
+
+        renderer.clear_canvas()
+        renderer.draw_particles()
         
-        window = glfw.create_window(SCREEN_WIDTH, SCREEN_HEIGHT, "SPH Fluid Simulation with modernGL", None, None)
-
-        if not window:
-            glfw.terminate()
-            raise Exception("GLFW window could not be initialised.")
-
-        # Make the context current
-        glfw.make_context_current(window)
-
-        ctx = moderngl.create_context()
-        
-        ctx.gc_mode = 'context_gc'
-        ctx.enable(moderngl.BLEND)
-        ctx.blend_func = moderngl.DEFAULT_BLENDING
-        ctx.point_size = 6
-
-        vertex_shader= '''
-        #version 330
-        in vec2 in_pos;
-        void main() {
-
-            gl_Position = vec4(in_pos, 0.0, 1.0);
-        }
-        '''
-
-        fragment_shader='''
-        #version 330
-        out vec4 fragColor;
-        void main() {
-
-            fragColor = vec4(1.0, 1.0, 1.0, alpha);
-        }
-        '''
-
-        prog = ctx.program(vertex_shader = vertex_shader, fragment_shader = fragment_shader)
-
-
-        n_particles = 1200
-        sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 4, dt=1/120)
-        positions = sim_to_ndc(sim.positions.copy())
-
-        vbo = ctx.buffer(positions.tobytes())
-        vao = ctx.vertex_array(prog, vbo, 'in_pos')
-
-        while not glfw.window_should_close(window):
-            glfw.poll_events()
-
-            positions, _ = sim.step()
-
-            NDC_positions = sim_to_ndc(positions)
-            vbo.write(NDC_positions.tobytes())
-
-            ctx.clear(0.1, 0.2, 0.3, 1.0)
-
-            vao.render(mode=moderngl.POINTS)
-            ctx.finish()
-
-            glfw.swap_buffers(window)
-
-    finally:
-        prog.release()
-        vbo.release()
-        vao.release()
-        ctx.release()
-        glfw.terminate()  
+        ## Display
+        gui.set_image(renderer.canvas)
+        gui.show()
 
 if __name__ == "__main__":
     main()
