@@ -6,21 +6,21 @@ ti.init(arch=ti.gpu)  ## Use GPU acceleration
 
 @ti.data_oriented
 class Simulator:
-    def __init__(self, N_particles, s_width, s_height, particle_radius, dt, g=-200):
+    def __init__(self, N_particles, s_width, s_height, particle_radius, dt, g=-500):
         self.N = N_particles
         self.s_height, self.s_width = s_height, s_width
         self.dt = dt
-        self.lookahead = 1/60
+        self.lookahead = 1/120
         self.g = ti.Vector([0, g], dt=ti.f32)
-        self.df = 0.4 ## Damping factor
-        self.viscosity = 0.8
+        self.df = 0.3 ## Damping factor
+        self.viscosity = 0.4
 
-        self.t_density = 0.5
-        self.p_multiplier = 1000
+        self.t_density = 10
+        self.p_multiplier = 5000
 
         self.particle_radius = particle_radius
-        self.mass = 1
-        self.sradius = 2 * 2 * particle_radius
+        self.mass = 10
+        self.sradius = 2.5 * 2 * particle_radius
 
         ## Taichi fields for particle data
         self.positions = ti.Vector.field(2, dtype=ti.f32, shape=N_particles)
@@ -32,17 +32,17 @@ class Simulator:
         self.future_positions = ti.Vector.field(2, dtype=ti.f32, shape=self.N)
 
         ## Spatial hashing
-        self.max_particles_per_cell = 32
-        self.grid_size = 128
+        self.max_particles_per_cell = 128
+        self.grid_size = 256
         self.cell_list = ti.field(dtype=ti.i32, shape=(self.grid_size, self.grid_size, self.max_particles_per_cell))
         self.cell_count = ti.field(dtype=ti.i32, shape=(self.grid_size, self.grid_size))
         self.cell_coords = ti.Vector.field(2, dtype=ti.i32, shape=self.N)
 
         ## Boundary conditions
-        self.floor_y = -s_height/2 + particle_radius
-        self.ceiling_y = s_height/2 - particle_radius
-        self.left_x = -s_width/2 + particle_radius
-        self.right_x = s_width/2 - particle_radius
+        self.floor_y = 0 + particle_radius
+        self.ceiling_y = s_height - particle_radius
+        self.left_x = 0 + particle_radius
+        self.right_x = s_width - particle_radius
 
         self.screen_positions = ti.Vector.field(2, ti.f32, shape=self.N)
 
@@ -50,14 +50,19 @@ class Simulator:
 
     @ti.kernel
     def initialize_particles(self):
+        particles_per_row = int(ti.sqrt(self.N))  # or use floor division for full rows
+        spacing_x = self.s_width * 0.25 / particles_per_row
+        spacing_y = self.s_height * 0.25 / particles_per_row
+
         for i in range(self.N):
-            ## Generate positions with some randomness
+            row = i // particles_per_row
+            col = i % particles_per_row
             self.positions[i] = ti.Vector([
-                ti.random() * self.s_width * 0.65 - self.s_width * 0.325,
-                ti.random() * self.s_height * 0.65 - self.s_height * 0.325
+                col * spacing_x + self.s_width * 0.40,  # offset from left
+                row * spacing_y + self.s_height * 0.40  # offset from bottom
             ])
             self.velocities[i] = ti.Vector([0.0, 0.0])
-            self.densities[i] = 0.1
+            self.densities[i] = 1
 
     @ti.func
     def smoothing_kernel(self, radius, d):
@@ -88,8 +93,8 @@ class Simulator:
 
     @ti.func
     def pos_to_cell_coord(self, pos):
-        cell_x = int(ti.floor((pos.x + self.s_width/2) / self.sradius))
-        cell_y = int(ti.floor((pos.y + self.s_height/2) / self.sradius))
+        cell_x = int(ti.floor(pos.x / self.sradius))
+        cell_y = int(ti.floor(pos.y / self.sradius))
         cell_x = ti.max(0, ti.min(self.grid_size - 1, cell_x))
         cell_y = ti.max(0, ti.min(self.grid_size - 1, cell_y))
         return cell_x, cell_y
@@ -154,10 +159,15 @@ class Simulator:
                             
                             if self.densities[j] > 1e-6:
                                 shared_p = self.calc_shared_pressure(self.densities[j], self.densities[i])
-                                self.pressure_forces[i] += (shared_p * self.mass * slope) * r_normalized / self.densities[j]
+                                pforce_ij = (shared_p * self.mass * slope) * r_normalized / self.densities[j]
+                                self.pressure_forces[i] += pforce_ij
+                                self.pressure_forces[j] -= pforce_ij
+
                             
                             vel_diff = self.velocities[j] - vel_i
-                            self.viscosity_forces[i] += vel_diff * (self.viscosity * slope)
+                            vforce_ij = vel_diff * (self.viscosity * slope)
+                            self.viscosity_forces[i] += vforce_ij
+                            self.viscosity_forces[j] -= vforce_ij
 
     @ti.kernel
     def integrate(self):
@@ -195,8 +205,14 @@ class Simulator:
     def compute_screen_positions(self):
         for i in range(self.N):
             pos = self.positions[i]
-            self.screen_positions[i] = (pos + ti.Vector([self.s_width / 2, self.s_height / 2])) / ti.Vector([self.s_width, self.s_height])
+            self.screen_positions[i] = pos / ti.Vector([self.s_width, self.s_height])
 
+    @ti.kernel
+    def log_avg_density(self):
+        total = 0.0
+        for i in range(self.N):
+            total += self.densities[i]
+        print("Average density:", total / self.N, end='\r')
 
     def step(self, dt):
         self.dt = dt
@@ -204,5 +220,6 @@ class Simulator:
         self.update_spatial_lookup()
         self.compute_densities_and_forces()
         self.integrate()
+        self.log_avg_density()
         self.compute_screen_positions()
         return self.screen_positions

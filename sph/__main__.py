@@ -8,7 +8,7 @@ class Renderer:
     def __init__(self, n_particles):
         self.canvas = ti.Vector.field(3, dtype=ti.f32, shape=(SCREEN_WIDTH, SCREEN_HEIGHT))
         self.screen_pos = ti.Vector.field(2, dtype=ti.f32, shape=n_particles)
-        self.radius = 3
+        self.radius = 2
         self.radius_sq = self.radius * self.radius
         self.bg_color = ti.Vector([0.07, 0.18, 0.25])  ## Dark blue
         self.particle_color = ti.Vector([0.1, 0.8, 0.5])  ## White
@@ -38,9 +38,9 @@ def main():
     gui = ti.GUI("SPH Fluid Simulation", res=(SCREEN_WIDTH, SCREEN_HEIGHT), fast_gui=True)
     renderer = Renderer(n_particles)
 
-    dt = 1/120
+    dt = 1/240
 
-    sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 3, dt)
+    sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 2, dt)
 
     while gui.running:
         ## Update renderer
