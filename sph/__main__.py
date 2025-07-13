@@ -38,7 +38,7 @@ def main():
     gui = ti.GUI("SPH Fluid Simulation", res=(SCREEN_WIDTH, SCREEN_HEIGHT), fast_gui=True)
     renderer = Renderer(n_particles)
 
-    dt = 1/240
+    dt = 1/150
 
     sim = Simulator(n_particles, SCREEN_WIDTH, SCREEN_HEIGHT, 2, dt)
 
